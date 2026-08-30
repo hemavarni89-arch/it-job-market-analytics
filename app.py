@@ -1,19 +1,14 @@
 """
-IT Job Market Analytics — Phase 6: Streamlit Market Dashboard
-Reads directly from job_market.db (built in Phases 1-5) and shows
-interactive charts: in-demand skills, top companies, top locations,
-salary benchmarks, work-mode/experience breakdown, and the Estimated
-Hiring Demand Score by role.
+IT Job Market Analytics — Phase 6: Streamlit Market Dashboard (v2)
+Adds a month selector: pick a month to see which skills were most
+in-demand specifically during that month, based on each job's
+original posted_date.
 
 SETUP:
     pip install streamlit plotly pandas
 
 RUN:
     streamlit run app.py
-
-This opens automatically in your browser (usually http://localhost:8501).
-Leave the Command Prompt window open while using it — closing it stops
-the app. Press Ctrl+C in that window to stop the app manually.
 """
 
 import sqlite3
@@ -31,6 +26,8 @@ def load_jobs() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql("SELECT * FROM jobs", conn)
     conn.close()
+    df["posted_date_parsed"] = pd.to_datetime(df["posted_date"], errors="coerce", utc=True)
+    df["month"] = df["posted_date_parsed"].dt.to_period("M").astype(str)
     return df
 
 
@@ -49,7 +46,6 @@ df = load_jobs()
 scores_df = load_demand_scores()
 
 st.title("IT Job Market Analytics")
-st.caption("Live view built from Adzuna-sourced job postings, cleaned and processed through the project's data pipeline.")
 
 # ---------- KPI row ----------
 col1, col2, col3, col4 = st.columns(4)
@@ -60,11 +56,37 @@ col4.metric("Postings with Salary Info", f"{int(df['has_salary_info'].sum()):,}"
 
 st.divider()
 
-# ---------- Row 1: Skills + Work mode-ish (contract type) ----------
+# ---------- Month-wise Skill Demand ----------
+st.subheader("Month-wise Skill Demand")
+
+available_months = sorted(df["month"].dropna().unique(), reverse=True)
+if available_months:
+    selected_month = st.selectbox("Select a month", available_months, index=0)
+    month_df = df[df["month"] == selected_month]
+
+    month_skills = month_df["skills"].dropna().str.split(", ").explode()
+    month_skills = month_skills[month_skills != ""]
+
+    if not month_skills.empty:
+        top_month_skills = month_skills.value_counts().head(10).reset_index()
+        top_month_skills.columns = ["skill", "count"]
+        fig = px.bar(top_month_skills, x="count", y="skill", orientation="h",
+                     color_discrete_sequence=["#38D6C4"])
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=350,
+                           title=f"Top skills in postings from {selected_month} ({len(month_df)} postings)")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info(f"No skill data found for {selected_month} yet.")
+else:
+    st.info("No dated postings available yet.")
+
+st.divider()
+
+# ---------- Row 1: Skills (all-time) + Work mode ----------
 c1, c2 = st.columns([1.3, 1])
 
 with c1:
-    st.subheader("In-Demand Technical Skills")
+    st.subheader("In-Demand Technical Skills (All-Time)")
     all_skills = df["skills"].dropna().str.split(", ").explode()
     all_skills = all_skills[all_skills != ""]
     top_skills = all_skills.value_counts().head(12).reset_index()
@@ -130,11 +152,6 @@ if not scores_df.empty:
                  color="demand_score", color_continuous_scale="Teal")
     fig.update_layout(height=420, xaxis_tickangle=-30)
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("Score = 50% posting frequency + 30% reposting pattern + 20% recency (0-100 scale). "
-               "An estimate of relative market demand, not actual hiring figures.")
+    st.caption("Score = 50% posting frequency + 30% reposting pattern + 20% recency (0-100 scale).")
 else:
     st.info("Run demand_score.py first to populate this chart.")
-
-st.divider()
-st.caption("Data source: Adzuna API (aggregates listings from Indeed, Naukri, and other job boards). "
-           "Sample reflects publicly available postings, not a full census of the job market.")
